@@ -11,7 +11,7 @@ pipeline {
             steps {
                 cleanWs()
                 git branch: 'main',
-                    url: 'https://github.com/NikhilCyberk/simple_flask_app.git'
+                    url: 'https://github.com/Gaurav12341234/simple_flask_app.git'
             }
         }
         
