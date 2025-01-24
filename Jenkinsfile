@@ -1,11 +1,11 @@
 pipeline {
-    agent any 
-    
+    agent any
+
     environment {
         VENV_PATH = 'venv'
         PORT = '8000'
     }
-    
+
     stages {
         stage('Clone Repository') {
             steps {
@@ -14,120 +14,104 @@ pipeline {
                     url: 'https://github.com/Gaurav12341234/simple_flask_app.git'
             }
         }
-        
+
         stage('Set Up Python Environment') {
             steps {
                 script {
-                    bat 'python -m venv venv'
-                    bat 'venv\\Scripts\\activate.bat && python -m pip install --upgrade pip'
-                    bat '''
-                        venv\\Scripts\\activate.bat && (
-                            pip install -r requirements.txt --verbose
-                        )
+                    // Create virtual environment and upgrade pip
+                    sh 'python3 -m venv $VENV_PATH'
+                    sh './$VENV_PATH/bin/python -m pip install --upgrade pip'
+                    
+                    // Install requirements
+                    sh '''
+                        source $VENV_PATH/bin/activate && \
+                        pip install -r requirements.txt --verbose
                     '''
                 }
             }
         }
-        
+
         stage('Run Tests') {
             steps {
                 script {
-                    bat 'venv\\Scripts\\activate.bat && python -m pytest'
+                    // Activate virtual environment and run tests
+                    sh 'source $VENV_PATH/bin/activate && python -m pytest'
                 }
             }
         }
-        
+
         stage('Deploy Application') {
             steps {
                 script {
-                    // Create a Windows batch script to run the server
-                    bat '''
-                        echo @echo off > start_server.bat
-                        echo set FLASK_APP=app.py >> start_server.bat
-                        echo set FLASK_ENV=production >> start_server.bat
-                        echo call venv\\Scripts\\activate.bat >> start_server.bat
-                        echo python -m flask run --host=127.0.0.1 --port=%PORT% >> start_server.bat
+                    // Create a shell script to run the server
+                    sh '''
+                        echo "#!/bin/bash" > start_server.sh
+                        echo "export FLASK_APP=app.py" >> start_server.sh
+                        echo "export FLASK_ENV=production" >> start_server.sh
+                        echo "source $VENV_PATH/bin/activate" >> start_server.sh
+                        echo "python -m flask run --host=127.0.0.1 --port=$PORT" >> start_server.sh
+                        chmod +x start_server.sh
                     '''
                     
-                    // Run the server in background
-                    bat 'start /B start_server.bat'
+                    // Run the server in the background
+                    sh './start_server.sh &'
                     
-                    // Wait for server to start using PowerShell
-                    bat '''
-                        powershell -Command "Start-Sleep -Seconds 15"
-                    '''
+                    // Wait for the server to start
+                    sh 'sleep 15'
                 }
             }
         }
-        
+
         stage('Verify Deployment') {
             steps {
                 script {
-                    // Using PowerShell for better HTTP request handling
-                    bat '''
-                        powershell -Command "try { \
-                            \$response = Invoke-WebRequest -Uri http://127.0.0.1:%PORT% -UseBasicParsing; \
-                            if (\$response.StatusCode -eq 200) { \
-                                Write-Host 'Application is running successfully!'; \
-                                exit 0; \
-                            } else { \
-                                Write-Host 'Application returned status code: ' \$response.StatusCode; \
-                                exit 1; \
-                            } \
-                        } catch { \
-                            Write-Host 'Failed to connect to application: ' \$_.Exception.Message; \
-                            exit 1; \
-                        }"
+                    // Check if the application is running using curl
+                    sh '''
+                        if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$PORT | grep -q "200"; then
+                            echo "Application is running successfully!"
+                        else
+                            echo "Failed to connect to application!"
+                            exit 1
+                        fi
                     '''
                 }
             }
         }
-        
+
         stage('Health Check') {
             steps {
                 script {
-                    bat '''
-                        powershell -Command "try { \
-                            \$response = Invoke-WebRequest -Uri http://127.0.0.1:%PORT%/health -UseBasicParsing; \
-                            \$content = \$response.Content | ConvertFrom-Json; \
-                            if (\$content.status -eq 'healthy') { \
-                                Write-Host 'Health check passed!'; \
-                                exit 0; \
-                            } else { \
-                                Write-Host 'Health check failed: ' \$content.status; \
-                                exit 1; \
-                            } \
-                        } catch { \
-                            Write-Host 'Health check failed: ' \$_.Exception.Message; \
-                            exit 1; \
-                        }"
+                    // Perform a health check using curl and jq
+                    sh '''
+                        response=$(curl -s http://127.0.0.1:$PORT/health)
+                        status=$(echo $response | jq -r .status)
+                        if [ "$status" == "healthy" ]; then
+                            echo "Health check passed!"
+                        else
+                            echo "Health check failed: $status"
+                            exit 1
+                        fi
                     '''
                 }
             }
         }
     }
-    
+
     post {
         always {
             script {
                 // Clean up processes
-                bat '''
-                    powershell -Command "try { \
-                        Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; \
-                        Get-Process -Name flask -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; \
-                        exit 0; \
-                    } catch { \
-                        exit 0; \
-                    }"
+                sh '''
+                    pkill -f "python -m flask" || true
                 '''
             }
         }
         failure {
             script {
                 echo 'Pipeline failed! Checking virtual environment status...'
-                bat '''
-                    echo Listing installed packages:
-                    venv\\Scripts\\activate.bat && pip list
+                sh '''
+                    echo "Listing installed packages:"
+                    source $VENV_PATH/bin/activate && pip list
                 '''
             }
         }
